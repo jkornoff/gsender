@@ -98,6 +98,10 @@ const HeightMapTool: React.FC = () => {
     // Get current work position
     const wpos = useTypedSelector((state) => state?.controller.state?.status?.wpos);
 
+    // Active WCS (G54..G59) -- used after probing to re-zero Z to the lowest
+    // measured point so the normalized height map matches machine Z=0.
+    const activeWcs = useTypedSelector((state) => state?.controller.modal?.wcs);
+
     // Get loaded file info
     const fileInfo = useTypedSelector((state) => state?.file);
 
@@ -245,6 +249,25 @@ const HeightMapTool: React.FC = () => {
             units,
         );
 
+        // The normalized map makes the lowest probe point Z=0 in map space.
+        // For the transformed G-code to actually cut at the right depth, the
+        // machine's active WCS Z=0 must also coincide with that lowest point.
+        // Probe Z values come back from GRBL in machine coordinates (MPos),
+        // so we shift the active WCS Z offset to that MPos value: this is
+        // the same thing as re-touching-off at the lowest probed XY.
+        const probedZs = probeZValuesRef.current;
+        if (probedZs.length > 0) {
+            const minProbeZ = Math.min(...probedZs);
+            const wcsToP: Record<string, number> = {
+                G54: 1, G55: 2, G56: 3, G57: 4, G58: 5, G59: 6,
+            };
+            const pNum = wcsToP[activeWcs ?? 'G54'] ?? 1;
+            controller.command(
+                'gcode',
+                `G10 L2 P${pNum} Z${minProbeZ.toFixed(3)}`,
+            );
+        }
+
         // Normalize (make lowest point Z=0)
         const normalizedMap = normalizeHeightMap(mapData);
 
@@ -252,7 +275,7 @@ const HeightMapTool: React.FC = () => {
 
         // Retract to clearance height
         controller.command('gcode', `G90 G0 Z${state.zClearance}`);
-    }, [state, units]);
+    }, [state, units, activeWcs]);
 
     // Handle probe response from serial port
     // PRB response format: [PRB:x.xxx,y.yyy,z.zzz:1] where :1 means probe succeeded
